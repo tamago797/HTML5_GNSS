@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>GPS 與雷達追蹤器</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background-color: #f4f4f9;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            background: #fff;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 400px;
+            box-sizing: border-box;
+        }
+        h2 { text-align: center; margin-top: 0; font-size: 1.5rem; }
+        
+        /* 雷達圖樣式 */
+        .radar-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 15px 0;
+            position: relative;
+        }
+        canvas {
+            background-color: #1a1a1a;
+            border-radius: 50%;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5) inset, 0 4px 8px rgba(0,0,0,0.2);
+            max-width: 100%;
+        }
+        .radar-label {
+            position: absolute;
+            top: -5px;
+            font-size: 0.8rem;
+            color: #d9534f;
+            font-weight: bold;
+            background: rgba(255,255,255,0.8);
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+
+        .data-group {
+            margin-bottom: 10px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #007bff;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .data-group .label { font-size: 0.85rem; color: #666; }
+        .data-group .value { font-size: 1.1rem; font-weight: bold; }
+        .highlight { color: #28a745; font-size: 1.2rem !important; }
+        
+        button {
+            width: 100%;
+            padding: 12px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        button:active { background-color: #0056b3; }
+        #enable-compass-btn { background-color: #28a745; }
+        #enable-compass-btn:active { background-color: #218838; }
+        
+        #status {
+            text-align: center; font-size: 0.9rem; color: #d9534f; margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>GPS 雷達追蹤器</h2>
+    <div id="status">等待 GPS 訊號...</div>
+
+    <div class="radar-container">
+        <div class="radar-label">手機朝向 (前)</div>
+        <canvas id="radar" width="260" height="260"></canvas>
+    </div>
+
+    <button id="enable-compass-btn">1. 授權並啟用指南針</button>
+    <button id="set-origin-btn">2. 設當前位置為初始點</button>
+
+    <div style="margin-top: 15px;"></div>
+
+    <div class="data-group">
+        <span class="label">手機朝向 (指南針)</span>
+        <span class="value" id="heading">未知</span>
+    </div>
+    <div class="data-group">
+        <span class="label">目標方位 (正北為0°)</span>
+        <span class="value" id="bearing">0°</span>
+    </div>
+    <div class="data-group">
+        <span class="label">目標距離</span>
+        <span class="value highlight" id="distance">0 m</span>
+    </div>
+</div>
+
+<script>
+    let initialPos = null;
+    let currentPos = null;
+    let currentHeading = 0; // 手機當前朝向 (正北為 0)
+    let currentDistance = 0;
+    let targetBearing = 0;
+
+    const statusEl = document.getElementById('status');
+    const distanceEl = document.getElementById('distance');
+    const bearingEl = document.getElementById('bearing');
+    const headingEl = document.getElementById('heading');
+    const canvas = document.getElementById('radar');
+    const ctx = canvas.getContext('2d');
+
+    // 初始化雷達圖
+    function drawRadar() {
+        const width = canvas.width;
+        const height = canvas.height;
+        const centerX = width / 2;
+        const centerY = height / 2;
+        const maxRadius = centerX - 10;
+
+        // 清除畫布
+        ctx.clearRect(0, 0, width, height);
+
+        // 畫雷達底圖 (同心圓與十字線)
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 1;
+        for (let i = 1; i <= 4; i++) {
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, (maxRadius / 4) * i, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+        ctx.beginPath();
+        ctx.moveTo(centerX, 10); ctx.lineTo(centerX, height - 10);
+        ctx.moveTo(10, centerY); ctx.lineTo(width - 10, centerY);
+        ctx.stroke();
+
+        // 畫中心點 (目前位置)
+        ctx.fillStyle = '#007bff';
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 畫掃描特效 (視覺點綴)
+        const time = Date.now() / 1000;
+        ctx.fillStyle = 'rgba(40, 167, 69, 0.15)';
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY);
+        ctx.arc(centerX, centerY, maxRadius, time % (Math.PI*2), (time % (Math.PI*2)) + 0.5);
+        ctx.fill();
+
+        // 如果有初始點，標記目標
+        if (initialPos && currentPos) {
+            // 計算目標在雷達上的相對角度
+            // 雷達正上方(手機朝向) 為 currentHeading
+            // 目標絕對方位 為 targetBearing
+            // 相對角度 = 目標方位 - 手機朝向
+            let relativeAngle = targetBearing - currentHeading;
+            let relativeRad = relativeAngle * (Math.PI / 180);
+
+            // 動態縮放半徑 (確保目標始終在雷達內)
+            let scaleRange = Math.max(20, currentDistance * 1.2); 
+            let drawRadius = (currentDistance / scaleRange) * maxRadius;
+            
+            if (drawRadius > maxRadius) drawRadius = maxRadius; // 避免畫出界外
+
+            // Canvas 座標系轉換：0度為正上，順時針增加
+            const targetX = centerX + drawRadius * Math.sin(relativeRad);
+            const targetY = centerY - drawRadius * Math.cos(relativeRad);
+
+            // 畫目標點
+            ctx.fillStyle = '#d9534f';
+            ctx.beginPath();
+            ctx.arc(targetX, targetY, 7, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 畫目標連線
+            ctx.strokeStyle = 'rgba(217, 83, 79, 0.5)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]);
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY);
+            ctx.lineTo(targetX, targetY);
+            ctx.stroke();
+            ctx.setLineDash([]); // 恢復實線
+        }
+
+        requestAnimationFrame(drawRadar);
+    }
+    drawRadar(); // 啟動雷達繪製迴圈
+
+    // 數學計算：弧度與角度
+    const toRadians = deg => deg * Math.PI / 180;
+    const toDegrees = rad => rad * 180 / Math.PI;
+
+    // Haversine 距離公式
+    function calculateDistance(lat1, lon1, lat2, lon2) {
+        const R = 6371e3;
+        const dLat = toRadians(lat2 - lat1);
+        const dLon = toRadians(lon2 - lon1);
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLon/2) * Math.sin(dLon/2);
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    // 方位角公式
+    function calculateBearing(lat1, lon1, lat2, lon2) {
+        const phi1 = toRadians(lat1), phi2 = toRadians(lat2), deltaLambda = toRadians(lon2 - lon1);
+        const y = Math.sin(deltaLambda) * Math.cos(phi2);
+        const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(deltaLambda);
+        return (toDegrees(Math.atan2(y, x)) + 360) % 360;
+    }
+
+    // 處理指南針數據
+    function handleOrientation(event) {
+        if (event.webkitCompassHeading !== undefined) {
+            // iOS 設備 (True North)
+            currentHeading = event.webkitCompassHeading;
+        } else if (event.alpha !== null) {
+            // Android 設備 (需反轉 alpha 角度)
+            currentHeading = 360 - event.alpha;
+        }
+        headingEl.textContent = `${currentHeading.toFixed(1)}°`;
+    }
+
+    // 啟用指南針 (處理 iOS 權限)
+    document.getElementById('enable-compass-btn').addEventListener('click', () => {
+        if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+            DeviceOrientationEvent.requestPermission()
+                .then(permissionState => {
+                    if (permissionState === 'granted') {
+                        window.addEventListener('deviceorientation', handleOrientation);
+                        document.getElementById('enable-compass-btn').style.display = 'none';
+                    } else {
+                        alert("指南針權限被拒絕。");
+                    }
+                })
+                .catch(console.error);
+        } else {
+            // 非 iOS 13+ 設備，直接監聽 (或者使用 deviceorientationabsolute 針對 Android)
+            window.addEventListener('deviceorientationabsolute', handleOrientation);
+            window.addEventListener('deviceorientation', handleOrientation);
+            document.getElementById('enable-compass-btn').style.display = 'none';
+        }
+    });
+
+    // 設定初始點
+    document.getElementById('set-origin-btn').addEventListener('click', () => {
+        if (currentPos) {
+            initialPos = { ...currentPos };
+            statusEl.textContent = "已鎖定初始點";
+            statusEl.style.color = "#28a745";
+        } else {
+            alert("尚未取得 GPS 座標。");
+        }
+    });
+
+    // 啟動 GPS 追蹤
+    if ("geolocation" in navigator) {
+        navigator.geolocation.watchPosition(
+            (position) => {
+                currentPos = { lat: position.coords.latitude, lon: position.coords.longitude };
+                statusEl.textContent = `GPS 更新中 (精度 ${position.coords.accuracy.toFixed(0)}m)`;
+                statusEl.style.color = "#28a745";
+
+                if (initialPos) {
+                    currentDistance = calculateDistance(initialPos.lat, initialPos.lon, currentPos.lat, currentPos.lon);
+                    targetBearing = calculateBearing(currentPos.lat, currentPos.lon, initialPos.lat, initialPos.lon); // 注意：計算「當前位置」看向「初始點」的方位
+                    
+                    distanceEl.textContent = currentDistance > 1000 ? `${(currentDistance/1000).toFixed(2)} km` : `${currentDistance.toFixed(1)} m`;
+                    bearingEl.textContent = `${targetBearing.toFixed(1)}°`;
+                }
+            },
+            (error) => { statusEl.textContent = "GPS 錯誤或無訊號"; statusEl.style.color = "#d9534f"; },
+            { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
+        );
+    }
+</script>
+</body>
+</html>
