@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>GPS 座標與方位追蹤器</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background-color: #f4f4f9;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            background: #fff;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 400px;
+        }
+        h2 {
+            text-align: center;
+            margin-top: 0;
+            font-size: 1.5rem;
+        }
+        .data-group {
+            margin-bottom: 15px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #007bff;
+        }
+        .data-group label {
+            display: block;
+            font-size: 0.85rem;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        .data-group div {
+            font-size: 1.1rem;
+            font-weight: bold;
+        }
+        button {
+            width: 100%;
+            padding: 15px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 10px;
+            transition: background 0.3s;
+        }
+        button:active {
+            background-color: #0056b3;
+        }
+        #status {
+            text-align: center;
+            font-size: 0.9rem;
+            color: #d9534f;
+            margin-bottom: 15px;
+            min-height: 20px;
+        }
+        .highlight {
+            color: #28a745;
+            font-size: 1.3rem !important;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>GPS 追蹤器</h2>
+    <div id="status">等待 GPS 訊號...</div>
+
+    <div class="data-group">
+        <label>初始位置 (Lat, Lon)</label>
+        <div id="initial-coords">尚未設定</div>
+    </div>
+
+    <div class="data-group">
+        <label>當前位置 (Lat, Lon)</label>
+        <div id="current-coords">讀取中...</div>
+    </div>
+
+    <div class="data-group">
+        <label>距離 (自初始點)</label>
+        <div id="distance" class="highlight">0 公尺</div>
+    </div>
+
+    <div class="data-group">
+        <label>方位角 (正北為 0°)</label>
+        <div id="bearing" class="highlight">0°</div>
+    </div>
+
+    <button id="set-origin-btn">設定為初始位置</button>
+</div>
+
+<script>
+    let initialPos = null;
+    let currentPos = null;
+    let watchId = null;
+
+    const statusEl = document.getElementById('status');
+    const initialCoordsEl = document.getElementById('initial-coords');
+    const currentCoordsEl = document.getElementById('current-coords');
+    const distanceEl = document.getElementById('distance');
+    const bearingEl = document.getElementById('bearing');
+    const setOriginBtn = document.getElementById('set-origin-btn');
+
+    // 角度轉弧度
+    function toRadians(degrees) {
+        return degrees * Math.PI / 180;
+    }
+
+    // 弧度轉角度
+    function toDegrees(radians) {
+        return radians * 180 / Math.PI;
+    }
+
+    // 計算兩個座標之間的距離 (Haversine 公式)
+    function calculateDistance(lat1, lon1, lat2, lon2) {
+        const R = 6371e3; // 地球半徑 (公尺)
+        const dLat = toRadians(lat2 - lat1);
+        const dLon = toRadians(lon2 - lon1);
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                  Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) *
+                  Math.sin(dLon/2) * Math.sin(dLon/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        return R * c; // 回傳公尺
+    }
+
+    // 計算從點1到點2的方位角 (0-360度)
+    function calculateBearing(lat1, lon1, lat2, lon2) {
+        const phi1 = toRadians(lat1);
+        const phi2 = toRadians(lat2);
+        const deltaLambda = toRadians(lon2 - lon1);
+
+        const y = Math.sin(deltaLambda) * Math.cos(phi2);
+        const x = Math.cos(phi1) * Math.sin(phi2) -
+                  Math.sin(phi1) * Math.cos(phi2) * Math.cos(deltaLambda);
+        
+        let theta = Math.atan2(y, x);
+        let bearing = (toDegrees(theta) + 360) % 360;
+        return bearing;
+    }
+
+    // 更新畫面資料
+    function updateDisplay() {
+        if (!currentPos) return;
+
+        currentCoordsEl.textContent = `${currentPos.lat.toFixed(6)}, ${currentPos.lon.toFixed(6)}`;
+
+        if (initialPos) {
+            const dist = calculateDistance(initialPos.lat, initialPos.lon, currentPos.lat, currentPos.lon);
+            const bear = calculateBearing(initialPos.lat, initialPos.lon, currentPos.lat, currentPos.lon);
+            
+            // 格式化距離
+            if (dist > 1000) {
+                distanceEl.textContent = `${(dist / 1000).toFixed(2)} 公里`;
+            } else {
+                distanceEl.textContent = `${dist.toFixed(1)} 公尺`;
+            }
+            
+            // 格式化方位角
+            let direction = "";
+            if (bear >= 337.5 || bear < 22.5) direction = "北";
+            else if (bear >= 22.5 && bear < 67.5) direction = "東北";
+            else if (bear >= 67.5 && bear < 112.5) direction = "東";
+            else if (bear >= 112.5 && bear < 157.5) direction = "東南";
+            else if (bear >= 157.5 && bear < 202.5) direction = "南";
+            else if (bear >= 202.5 && bear < 247.5) direction = "西南";
+            else if (bear >= 247.5 && bear < 292.5) direction = "西";
+            else if (bear >= 292.5 && bear < 337.5) direction = "西北";
+
+            bearingEl.textContent = `${bear.toFixed(1)}° (${direction})`;
+        }
+    }
+
+    // 設定初始點按鈕事件
+    setOriginBtn.addEventListener('click', () => {
+        if (currentPos) {
+            initialPos = { lat: currentPos.lat, lon: currentPos.lon };
+            initialCoordsEl.textContent = `${initialPos.lat.toFixed(6)}, ${initialPos.lon.toFixed(6)}`;
+            updateDisplay();
+            statusEl.textContent = "已更新初始位置";
+            statusEl.style.color = "#28a745";
+        } else {
+            alert("尚未取得 GPS 座標，請稍後再試。");
+        }
+    });
+
+    // 初始化 GPS 追蹤
+    if ("geolocation" in navigator) {
+        watchId = navigator.geolocation.watchPosition(
+            (position) => {
+                currentPos = {
+                    lat: position.coords.latitude,
+                    lon: position.coords.longitude
+                };
+                statusEl.textContent = `GPS 訊號良好 (精度: ${position.coords.accuracy.toFixed(1)}m)`;
+                statusEl.style.color = "#28a745";
+                
+                // 如果是第一次抓到座標，自動設為初始點
+                if (!initialPos) {
+                    initialPos = { ...currentPos };
+                    initialCoordsEl.textContent = `${initialPos.lat.toFixed(6)}, ${initialPos.lon.toFixed(6)}`;
+                }
+                
+                updateDisplay();
+            },
+            (error) => {
+                let msg = "GPS 錯誤: ";
+                switch(error.code) {
+                    case error.PERMISSION_DENIED: msg += "使用者拒絕提供位置。"; break;
+                    case error.POSITION_UNAVAILABLE: msg += "無法取得位置資訊。"; break;
+                    case error.TIMEOUT: msg += "請求超時。"; break;
+                }
+                statusEl.textContent = msg;
+                statusEl.style.color = "#d9534f";
+            },
+            {
+                enableHighAccuracy: true,
+                maximumAge: 0,
+                timeout: 10000
+            }
+        );
+    } else {
+        statusEl.textContent = "您的瀏覽器不支援 Geolocation API";
+    }
+</script>
+</body>
+</html>
