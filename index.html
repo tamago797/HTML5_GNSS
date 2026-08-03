@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>GPS 與雷達追蹤器</title>
+    <title>GPS 與雷達追蹤器 (平滑版)</title>
     <style>
         body {
             font-family: system-ui, -apple-system, sans-serif;
             background-color: #f4f4f9;
             color: #333;
             margin: 0;
-            padding: 20px;
+            padding: 15px;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -24,7 +24,7 @@
             max-width: 400px;
             box-sizing: border-box;
         }
-        h2 { text-align: center; margin-top: 0; font-size: 1.5rem; }
+        h2 { text-align: center; margin-top: 0; font-size: 1.4rem; }
         
         .radar-container {
             display: flex;
@@ -98,7 +98,7 @@
     <div id="status">等待 GPS 訊號...</div>
 
     <div class="radar-container">
-        <div class="radar-label"> </div>
+        <div class="radar-label">手機朝向 (前)</div>
         <canvas id="radar" width="280" height="280"></canvas>
     </div>
 
@@ -107,7 +107,6 @@
 
     <div style="margin-top: 15px;"></div>
 
-    <!-- 座標資訊區塊 -->
     <div class="data-group">
         <div class="data-row">
             <span class="label">初始點</span>
@@ -120,15 +119,14 @@
     
     <div class="data-group">
         <div class="data-row">
-            <span class="label">當前位置</span>
-            <span class="value" id="heading">朝向: 未知</span>
+            <span class="label"> </span>
+            <span class="value" id="heading"> </span>
         </div>
         <div class="data-row">
             <span class="coords" id="current-coords">讀取中...</span>
         </div>
     </div>
 
-    <!-- 目標計算區塊 -->
     <div class="data-group">
         <div class="data-row">
             <span class="label">目標方位 (正北0°)</span>
@@ -142,39 +140,82 @@
 </div>
 
 <script>
+    // === 核心變數 ===
     let initialPos = null;
     let currentPos = null;
-    let currentHeading = 0; // 手機當前朝向 (0-360)
     let currentDistance = 0;
     let targetBearing = 0;
 
+    // 指南針平滑化變數
+    let targetHeading = 0;  // 感測器讀到的真實數值
+    let currentHeading = 0; // UI 動畫平滑過渡的數值
+
+    // DOM 元素
     const statusEl = document.getElementById('status');
     const distanceEl = document.getElementById('distance');
     const bearingEl = document.getElementById('bearing');
     const headingEl = document.getElementById('heading');
-    
     const initialStatusEl = document.getElementById('initial-status');
     const initialCoordsEl = document.getElementById('initial-coords');
     const currentCoordsEl = document.getElementById('current-coords');
-    
     const canvas = document.getElementById('radar');
     const ctx = canvas.getContext('2d');
 
-    // 格式化座標顯示
+    // === 數學與公式 ===
+    const toRadians = deg => deg * Math.PI / 180;
+    const toDegrees = rad => rad * 180 / Math.PI;
+
+    // Haversine 距離公式
+    function calculateDistance(lat1, lon1, lat2, lon2) {
+        const R = 6371e3;
+        const dLat = toRadians(lat2 - lat1), dLon = toRadians(lon2 - lon1);
+        const a = Math.sin(dLat/2) ** 2 + Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLon/2) ** 2;
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    // 方位角公式
+    function calculateBearing(lat1, lon1, lat2, lon2) {
+        const phi1 = toRadians(lat1), phi2 = toRadians(lat2), deltaLambda = toRadians(lon2 - lon1);
+        const y = Math.sin(deltaLambda) * Math.cos(phi2);
+        const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(deltaLambda);
+        return (toDegrees(Math.atan2(y, x)) + 360) % 360;
+    }
+
     function formatCoords(lat, lon) {
         return `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
     }
 
-    function drawRadar() {
+    // === 感測器事件處理 ===
+    function handleOrientation(event) {
+        if (event.webkitCompassHeading !== undefined) {
+            targetHeading = event.webkitCompassHeading;
+        } else if (event.alpha !== null) {
+            targetHeading = 360 - event.alpha;
+        }
+    }
+
+    // === 動畫與雷達繪製迴圈 (60Hz) ===
+    function renderLoop() {
+        // 1. 指南針低通濾波 (平滑運算，解決 359跳0的翻轉問題)
+        let diff = targetHeading - currentHeading;
+        if (diff > 180) diff -= 360;
+        if (diff < -180) diff += 360;
+        
+        currentHeading += diff * 0.1; // 0.1是平滑係數，確保指針不狂抖
+        
+        let displayHeading = (currentHeading % 360 + 360) % 360;
+        headingEl.textContent = `朝向: ${displayHeading.toFixed(1)}°`;
+
+        // 2. 繪製雷達圖
         const width = canvas.width;
         const height = canvas.height;
         const centerX = width / 2;
         const centerY = height / 2;
-        const maxRadius = centerX - 20; // 留出邊界空間畫文字
+        const maxRadius = centerX - 20;
 
         ctx.clearRect(0, 0, width, height);
 
-        // 畫雷達底圖 (同心圓與十字線)
+        // 雷達底圖
         ctx.strokeStyle = '#333';
         ctx.lineWidth = 1;
         for (let i = 1; i <= 4; i++) {
@@ -188,28 +229,24 @@
         ctx.stroke();
 
         // 標記正北方 (N)
-        // 雷達正上方是手機朝向 (currentHeading)，所以正北方的相對角度是 0 - currentHeading
-        const northRelativeAngle = -currentHeading;
-        const northRelativeRad = northRelativeAngle * (Math.PI / 180);
-        
-        // 將 'N' 畫在最外圈半徑加上一點偏移的位置
+        const northRelativeRad = (-currentHeading) * (Math.PI / 180);
         const northRadius = maxRadius + 12; 
         const northX = centerX + northRadius * Math.sin(northRelativeRad);
         const northY = centerY - northRadius * Math.cos(northRelativeRad);
 
-        ctx.fillStyle = '#00ff00'; // 綠色標記北方
+        ctx.fillStyle = '#00ff00';
         ctx.font = 'bold 16px Arial';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText('N', northX, northY);
 
-        // 畫中心點 (目前位置)
+        // 中心點
         ctx.fillStyle = '#007bff';
         ctx.beginPath();
         ctx.arc(centerX, centerY, 5, 0, Math.PI * 2);
         ctx.fill();
 
-        // 畫掃描特效
+        // 掃描特效
         const time = Date.now() / 1000;
         ctx.fillStyle = 'rgba(40, 167, 69, 0.15)';
         ctx.beginPath();
@@ -217,11 +254,11 @@
         ctx.arc(centerX, centerY, maxRadius, time % (Math.PI*2), (time % (Math.PI*2)) + 0.5);
         ctx.fill();
 
-        // 標記初始目標點
+        // 標記目標點
         if (initialPos && currentPos) {
-            let relativeAngle = targetBearing - currentHeading;
-            let relativeRad = relativeAngle * (Math.PI / 180);
+            let relativeRad = (targetBearing - currentHeading) * (Math.PI / 180);
 
+            // 動態縮放
             let scaleRange = Math.max(20, currentDistance * 1.2); 
             let drawRadius = (currentDistance / scaleRange) * maxRadius;
             if (drawRadius > maxRadius) drawRadius = maxRadius; 
@@ -229,11 +266,13 @@
             const targetX = centerX + drawRadius * Math.sin(relativeRad);
             const targetY = centerY - drawRadius * Math.cos(relativeRad);
 
+            // 畫紅點
             ctx.fillStyle = '#d9534f';
             ctx.beginPath();
             ctx.arc(targetX, targetY, 7, 0, Math.PI * 2);
             ctx.fill();
 
+            // 畫連線
             ctx.strokeStyle = 'rgba(217, 83, 79, 0.5)';
             ctx.lineWidth = 2;
             ctx.setLineDash([5, 5]);
@@ -244,52 +283,37 @@
             ctx.setLineDash([]);
         }
 
-        requestAnimationFrame(drawRadar);
+        // 呼叫下一幀
+        requestAnimationFrame(renderLoop);
     }
-    drawRadar();
+    
+    // 啟動動畫引擎
+    requestAnimationFrame(renderLoop);
 
-    // 數學與感測器邏輯
-    const toRadians = deg => deg * Math.PI / 180;
-    const toDegrees = rad => rad * 180 / Math.PI;
-
-    function calculateDistance(lat1, lon1, lat2, lon2) {
-        const R = 6371e3;
-        const dLat = toRadians(lat2 - lat1), dLon = toRadians(lon2 - lon1);
-        const a = Math.sin(dLat/2) ** 2 + Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLon/2) ** 2;
-        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    }
-
-    function calculateBearing(lat1, lon1, lat2, lon2) {
-        const phi1 = toRadians(lat1), phi2 = toRadians(lat2), deltaLambda = toRadians(lon2 - lon1);
-        const y = Math.sin(deltaLambda) * Math.cos(phi2);
-        const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(deltaLambda);
-        return (toDegrees(Math.atan2(y, x)) + 360) % 360;
-    }
-
-    function handleOrientation(event) {
-        if (event.webkitCompassHeading !== undefined) {
-            currentHeading = event.webkitCompassHeading;
-        } else if (event.alpha !== null) {
-            currentHeading = 360 - event.alpha;
-        }
-        headingEl.textContent = `朝向: ${currentHeading.toFixed(1)}°`;
-    }
-
+    // === 按鈕事件：啟用指南針 ===
     document.getElementById('enable-compass-btn').addEventListener('click', () => {
         if (typeof DeviceOrientationEvent.requestPermission === 'function') {
             DeviceOrientationEvent.requestPermission().then(state => {
                 if (state === 'granted') {
-                    window.addEventListener('deviceorientation', handleOrientation);
+                    window.addEventListener('deviceorientation', handleOrientation, true);
                     document.getElementById('enable-compass-btn').style.display = 'none';
                 } else alert("指南針權限被拒絕。");
             }).catch(console.error);
         } else {
-            window.addEventListener('deviceorientationabsolute', handleOrientation);
-            window.addEventListener('deviceorientation', handleOrientation);
+            // 防衝突綁定機制 (Android)
+            window.removeEventListener('deviceorientationabsolute', handleOrientation, true);
+            window.removeEventListener('deviceorientation', handleOrientation, true);
+            
+            if ('ondeviceorientationabsolute' in window) {
+                window.addEventListener('deviceorientationabsolute', handleOrientation, true);
+            } else {
+                window.addEventListener('deviceorientation', handleOrientation, true);
+            }
             document.getElementById('enable-compass-btn').style.display = 'none';
         }
     });
 
+    // === 按鈕事件：鎖定初始點 ===
     document.getElementById('set-origin-btn').addEventListener('click', () => {
         if (currentPos) {
             initialPos = { ...currentPos };
@@ -303,6 +327,7 @@
         }
     });
 
+    // === 啟動 GPS 追蹤 ===
     if ("geolocation" in navigator) {
         navigator.geolocation.watchPosition(
             (position) => {
