@@ -275,27 +275,17 @@
         headingEl.textContent = `朝向: ${currentHeading.toFixed(1)}°`;
     }
 
-// 啟用指南針 (處理 iOS 權限與 Android 絕對方位)
     document.getElementById('enable-compass-btn').addEventListener('click', () => {
         if (typeof DeviceOrientationEvent.requestPermission === 'function') {
-            // iOS 13+ 流程
             DeviceOrientationEvent.requestPermission().then(state => {
                 if (state === 'granted') {
                     window.addEventListener('deviceorientation', handleOrientation);
                     document.getElementById('enable-compass-btn').style.display = 'none';
-                } else {
-                    alert("指南針權限被拒絕。");
-                }
+                } else alert("指南針權限被拒絕。");
             }).catch(console.error);
         } else {
-            // Android 流程 (如 Samsung)
-            // 優先檢查並只綁定 deviceorientationabsolute 以獲取真實正北
-            if ('ondeviceorientationabsolute' in window) {
-                window.addEventListener('deviceorientationabsolute', handleOrientation);
-            } else {
-                // 舊版瀏覽器降級方案
-                window.addEventListener('deviceorientation', handleOrientation);
-            }
+            window.addEventListener('deviceorientationabsolute', handleOrientation);
+            window.addEventListener('deviceorientation', handleOrientation);
             document.getElementById('enable-compass-btn').style.display = 'none';
         }
     });
