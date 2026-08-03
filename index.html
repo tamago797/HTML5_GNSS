@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>七龍珠雷達 GPS 追蹤器</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background-color: #8fb1cc; /* 模擬圖片中的天空藍背景 */
+            color: #333;
+            margin: 0;
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            width: 100%;
+            max-width: 400px;
+            box-sizing: border-box;
+            margin-top: 10px;
+        }
+        h2 { text-align: center; margin-top: 0; font-size: 1.4rem; }
+        
+        /* 龍珠雷達外殼 UI */
+        .radar-device {
+            position: relative;
+            width: 320px;
+            height: 320px;
+            background-color: #e8e8df; /* 米白/淺灰外殼 */
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 35px auto 15px;
+            box-shadow: 
+                inset -8px -8px 15px rgba(0,0,0,0.15), 
+                inset 8px 8px 15px rgba(255,255,255,0.8),
+                4px 6px 12px rgba(0,0,0,0.3);
+            border: 2px solid #b3b3a9;
+        }
+
+        /* 雷達頂部按鈕 */
+        .radar-button {
+            position: absolute;
+            top: -26px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 46px;
+            height: 26px;
+            background-color: #e8e8df;
+            border-radius: 12px 12px 0 0;
+            border: 2px solid #b3b3a9;
+            border-bottom: none;
+            box-shadow: inset -4px 0 8px rgba(0,0,0,0.1);
+        }
+        .radar-button::before {
+            content: '';
+            position: absolute;
+            top: -12px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 28px;
+            height: 12px;
+            background-color: #d6d6cc;
+            border-radius: 10px 10px 0 0;
+            border: 2px solid #b3b3a9;
+            border-bottom: none;
+            box-shadow: inset -2px 0 4px rgba(0,0,0,0.1);
+        }
+
+        canvas {
+            background-color: #16a316; /* 經典亮綠色 */
+            border-radius: 50%;
+            border: 6px solid #3a3a3a; /* 深色內環 */
+            box-shadow: inset 0 0 35px rgba(0, 50, 0, 0.7); /* 邊緣暗角，增加螢幕立體感 */
+            max-width: 100%;
+        }
+
+        .data-group {
+            margin-bottom: 10px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #f39c12; /* 改為與龍珠搭配的橘黃色 */
+            display: flex;
+            flex-direction: column;
+        }
+        .data-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 4px;
+        }
+        .data-row:last-child { margin-bottom: 0; }
+        .label { font-size: 0.85rem; color: #666; }
+        .value { font-size: 1rem; font-weight: bold; }
+        .coords { font-size: 0.8rem; color: #555; font-family: monospace; }
+        .highlight { color: #d35400; font-size: 1.2rem !important; }
+        
+        button {
+            width: 100%;
+            padding: 12px;
+            background-color: #f39c12;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 10px;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.2);
+        }
+        button:active { background-color: #e67e22; }
+        #enable-compass-btn { background-color: #27ae60; margin-bottom: 10px; }
+        #enable-compass-btn:active { background-color: #2ecc71; }
+        
+        #status { text-align: center; font-size: 0.9rem; color: #d9534f; margin-bottom: 10px; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<!-- 雷達圖形區塊 -->
+<div class="radar-device">
+    <div class="radar-button"></div>
+    <canvas id="radar" width="280" height="280"></canvas>
+</div>
+
+<!-- 數據與操作區塊 -->
+<div class="container">
+    <h2>GPS 追蹤器</h2>
+    <div id="status">等待 GPS 訊號...</div>
+
+    <button id="enable-compass-btn">1. 授權並啟用指南針</button>
+    <button id="set-origin-btn">2. 設當前位置為目標點 (龍珠)</button>
+
+    <div style="margin-top: 15px;"></div>
+
+    <div class="data-group">
+        <div class="data-row">
+            <span class="label">目標點 (初始位置)</span>
+            <span class="value" id="initial-status">尚未設定</span>
+        </div>
+        <div class="data-row">
+            <span class="coords" id="initial-coords">--</span>
+        </div>
+    </div>
+    
+    <div class="data-group">
+        <div class="data-row">
+            <span class="label">當前位置</span>
+            <span class="value" id="heading">朝向: 未知</span>
+        </div>
+        <div class="data-row">
+            <span class="coords" id="current-coords">讀取中...</span>
+        </div>
+    </div>
+
+    <div class="data-group">
+        <div class="data-row">
+            <span class="label">目標方位 (正北0°)</span>
+            <span class="value" id="bearing">0°</span>
+        </div>
+        <div class="data-row">
+            <span class="label">目標距離</span>
+            <span class="value highlight" id="distance">0 m</span>
+        </div>
+    </div>
+</div>
+
+<script>
+    // === 核心變數 ===
+    let initialPos = null;
+    let currentPos = null;
+    let currentDistance = 0;
+    let targetBearing = 0;
+
+    let targetHeading = 0;  
+    let currentHeading = 0; 
+
+    const statusEl = document.getElementById('status');
+    const distanceEl = document.getElementById('distance');
+    const bearingEl = document.getElementById('bearing');
+    const headingEl = document.getElementById('heading');
+    const initialStatusEl = document.getElementById('initial-status');
+    const initialCoordsEl = document.getElementById('initial-coords');
+    const currentCoordsEl = document.getElementById('current-coords');
+    const canvas = document.getElementById('radar');
+    const ctx = canvas.getContext('2d');
+
+    // === 數學與公式 ===
+    const toRadians = deg => deg * Math.PI / 180;
+    const toDegrees = rad => rad * 180 / Math.PI;
+
+    function calculateDistance(lat1, lon1, lat2, lon2) {
+        const R = 6371e3;
+        const dLat = toRadians(lat2 - lat1), dLon = toRadians(lon2 - lon1);
+        const a = Math.sin(dLat/2) ** 2 + Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLon/2) ** 2;
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    function calculateBearing(lat1, lon1, lat2, lon2) {
+        const phi1 = toRadians(lat1), phi2 = toRadians(lat2), deltaLambda = toRadians(lon2 - lon1);
+        const y = Math.sin(deltaLambda) * Math.cos(phi2);
+        const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(deltaLambda);
+        return (toDegrees(Math.atan2(y, x)) + 360) % 360;
+    }
+
+    function formatCoords(lat, lon) {
+        return `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+    }
+
+    function handleOrientation(event) {
+        if (event.webkitCompassHeading !== undefined) {
+            targetHeading = event.webkitCompassHeading;
+        } else if (event.alpha !== null) {
+            targetHeading = 360 - event.alpha;
+        }
+    }
+
+    // === 動畫與雷達繪製迴圈 ===
+    function renderLoop() {
+        let diff = targetHeading - currentHeading;
+        if (diff > 180) diff -= 360;
+        if (diff < -180) diff += 360;
+        
+        currentHeading += diff * 0.1;
+        
+        let displayHeading = (currentHeading % 360 + 360) % 360;
+        headingEl.textContent = `朝向: ${displayHeading.toFixed(1)}°`;
+
+        const width = canvas.width;
+        const height = canvas.height;
+        const centerX = width / 2;
+        const centerY = height / 2;
+        const maxRadius = centerX - 10;
+
+        // 清除畫布
+        ctx.clearRect(0, 0, width, height);
+
+        // 繪製網格 (Dragon Radar 風格)
+        ctx.strokeStyle = 'rgba(0, 70, 0, 0.4)';
+        ctx.lineWidth = 1.5;
+        const gridSize = 24; 
+        
+        // 畫垂直線
+        for (let x = centerX % gridSize; x < width; x += gridSize) {
+            ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke();
+        }
+        // 畫水平線
+        for (let y = centerY % gridSize; y < height; y += gridSize) {
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke();
+        }
+
+        // 保留正北方 (N) 標記，改為低調的深綠色融入背景
+        const northRelativeRad = (-currentHeading) * (Math.PI / 180);
+        const northRadius = maxRadius - 5; 
+        const northX = centerX + northRadius * Math.sin(northRelativeRad);
+        const northY = centerY - northRadius * Math.cos(northRelativeRad);
+
+        ctx.fillStyle = 'rgba(0, 100, 0, 0.8)';
+        ctx.font = 'bold 14px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('N', northX, northY);
+
+        // 標記目標點 (黃色發光圓點)
+        if (initialPos && currentPos) {
+            let relativeRad = (targetBearing - currentHeading) * (Math.PI / 180);
+
+            // 動態縮放
+            let scaleRange = Math.max(20, currentDistance * 1.2); 
+            let drawRadius = (currentDistance / scaleRange) * maxRadius;
+            if (drawRadius > maxRadius) drawRadius = maxRadius; 
+
+            const targetX = centerX + drawRadius * Math.sin(relativeRad);
+            const targetY = centerY - drawRadius * Math.cos(relativeRad);
+
+            // 加入黃色發光效果
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = '#ffff00';
+            ctx.fillStyle = '#ffef00';
+            ctx.beginPath();
+            ctx.arc(targetX, targetY, 6, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0; // 重設陰影避免影響其他元件
+        }
+
+        // 中心點：紅色的正立三角形 (代表自己)
+        ctx.fillStyle = '#ff0000';
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY - 10); // 頂點朝上
+        ctx.lineTo(centerX + 8, centerY + 8); // 右下
+        ctx.lineTo(centerX - 8, centerY + 8); // 左下
+        ctx.fill();
+
+        requestAnimationFrame(renderLoop);
+    }
+    
+    requestAnimationFrame(renderLoop);
+
+    // === 按鈕事件 ===
+    document.getElementById('enable-compass-btn').addEventListener('click', () => {
+        if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+            DeviceOrientationEvent.requestPermission().then(state => {
+                if (state === 'granted') {
+                    window.addEventListener('deviceorientation', handleOrientation, true);
+                    document.getElementById('enable-compass-btn').style.display = 'none';
+                } else alert("指南針權限被拒絕。");
+            }).catch(console.error);
+        } else {
+            window.removeEventListener('deviceorientationabsolute', handleOrientation, true);
+            window.removeEventListener('deviceorientation', handleOrientation, true);
+            
+            if ('ondeviceorientationabsolute' in window) {
+                window.addEventListener('deviceorientationabsolute', handleOrientation, true);
+            } else {
+                window.addEventListener('deviceorientation', handleOrientation, true);
+            }
+            document.getElementById('enable-compass-btn').style.display = 'none';
+        }
+    });
+
+    document.getElementById('set-origin-btn').addEventListener('click', () => {
+        if (currentPos) {
+            initialPos = { ...currentPos };
+            initialStatusEl.textContent = "已鎖定";
+            initialStatusEl.style.color = "#d35400";
+            initialCoordsEl.textContent = formatCoords(initialPos.lat, initialPos.lon);
+            statusEl.textContent = "已鎖定目標點！";
+            statusEl.style.color = "#27ae60";
+        } else {
+            alert("尚未取得 GPS 座標。");
+        }
+    });
+
+    // === 啟動 GPS 追蹤 ===
+    if ("geolocation" in navigator) {
+        navigator.geolocation.watchPosition(
+            (position) => {
+                currentPos = { lat: position.coords.latitude, lon: position.coords.longitude };
+                currentCoordsEl.textContent = formatCoords(currentPos.lat, currentPos.lon);
+                statusEl.textContent = `GPS 更新中 (精度 ${position.coords.accuracy.toFixed(0)}m)`;
+                statusEl.style.color = "#27ae60";
+
+                if (initialPos) {
+                    currentDistance = calculateDistance(initialPos.lat, initialPos.lon, currentPos.lat, currentPos.lon);
+                    targetBearing = calculateBearing(currentPos.lat, currentPos.lon, initialPos.lat, initialPos.lon);
+                    
+                    distanceEl.textContent = currentDistance > 1000 ? `${(currentDistance/1000).toFixed(2)} km` : `${currentDistance.toFixed(1)} m`;
+                    bearingEl.textContent = `${targetBearing.toFixed(1)}°`;
+                }
+            },
+            (error) => { statusEl.textContent = "GPS 錯誤或無訊號"; statusEl.style.color = "#d9534f"; },
+            { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
+        );
+    }
+</script>
+</body>
+</html>
